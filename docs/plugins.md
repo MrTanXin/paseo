@@ -155,7 +155,8 @@ Shared files import contract helpers and types from `@getpaseo/plugin`. Server h
 `@getpaseo/plugin/react-native`. Its `Icon` resolves a Lucide name using the client's installed icon
 set; an unknown name renders nothing so it cannot break the plugin surface.
 Its controlled modal keeps presentation metadata on `<Modal title="…" icon={…}>` and body UI in
-`<Modal.Content>`.
+`<Modal.Content>`. Body layout, sheet-aware scrolling, and clipboard actions follow the
+[host UI contract](../public-docs/plugins/v0.8/reference.md#host-ui).
 Plugin UI runs on desktop and mobile across multiple themes: color every `Text` from
 `theme.colors.foreground` or `theme.colors.foregroundMuted`, and size layout from `layout.compact`.
 See `public-docs/plugins/v0.8/reference.md`.
@@ -270,6 +271,12 @@ export default function contribute(server: PluginServerContext) {
   return () => {};
 }
 ```
+
+Implement optional `ProviderRegistration.getCatalogCacheKey(options)` to share equivalent catalogue
+probes. The callback runs in the plugin process before discovery and receives the actual global or
+workspace target. Return a key covering effective configuration and execution environment, or
+`undefined` for target-specific caching. Ignore `force` when choosing identity. Existing providers
+need no change. See [catalogue ownership](providers.md#provider-snapshot-refresh-contract).
 
 `send()` resolves after acceptance. Publish operation completion, prompt disposition, turn state,
 configuration, permissions, persistence, and complete timeline snapshots through `onEvent()`.
