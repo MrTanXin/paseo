@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Socket } from "node:net";
 import { describe, expect, test } from "vitest";
 
@@ -31,17 +31,21 @@ function handleTunneledRequest({ req, socket, tunneledRequests }: TunneledConnec
   onTunnelData({ req, socket, tunneledRequests });
 }
 
+function getListeningPort(server: Server): number {
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    throw new Error(`Expected the fake proxy to listen on a TCP port, got ${String(address)}`);
+  }
+  return address.port;
+}
+
 describe("installGlobalProxyDispatcher", () => {
   test("only routes daemon-issued fetch() through HTTP_PROXY once enabled", async () => {
     const tunneledRequests: string[] = [];
     const proxy = createServer();
     proxy.on("connect", (req, socket) => handleTunneledRequest({ req, socket, tunneledRequests }));
     await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", () => resolve()));
-    const address = proxy.address();
-    if (address === null || typeof address === "string") {
-      throw new Error(`Expected the fake proxy to listen on a TCP port, got ${String(address)}`);
-    }
-    const { port } = address;
+    const port = getListeningPort(proxy);
 
     try {
       process.env.HTTP_PROXY = `http://127.0.0.1:${port}`;
