@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Socket } from "node:net";
+import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
 
-import { installGlobalProxyDispatcher } from "./global-proxy-dispatcher.js";
+const execFileAsync = promisify(execFile);
 
 interface TunneledConnection {
   req: IncomingMessage;
@@ -39,6 +41,39 @@ function getListeningPort(server: Server): number {
   return address.port;
 }
 
+interface IsolatedFetchOptions {
+  proxyUrl: string;
+  enabled: boolean;
+}
+
+async function runIsolatedFetch({ proxyUrl, enabled }: IsolatedFetchOptions) {
+  const dispatcherModule = new URL("./global-proxy-dispatcher.ts", import.meta.url).href;
+  const script = `
+    const { installGlobalProxyDispatcher } = await import(${JSON.stringify(dispatcherModule)});
+    installGlobalProxyDispatcher(${enabled});
+    installGlobalProxyDispatcher(${enabled});
+    const response = await fetch("http://example.invalid/some-path");
+    process.stdout.write(await response.text());
+  `;
+  const env = {
+    ...process.env,
+    HTTP_PROXY: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    NO_PROXY: "",
+    http_proxy: proxyUrl,
+    https_proxy: proxyUrl,
+    no_proxy: "",
+    ALL_PROXY: "",
+    all_proxy: "",
+  };
+
+  return execFileAsync(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", script],
+    { cwd: process.cwd(), env },
+  );
+}
+
 describe("installGlobalProxyDispatcher", () => {
   test("only routes daemon-issued fetch() through HTTP_PROXY once enabled", async () => {
     const tunneledRequests: string[] = [];
@@ -48,25 +83,20 @@ describe("installGlobalProxyDispatcher", () => {
     const port = getListeningPort(proxy);
 
     try {
-      process.env.HTTP_PROXY = `http://127.0.0.1:${port}`;
+      const proxyUrl = `http://127.0.0.1:${port}`;
 
       // Disabled (e.g. globalProxyDispatcher: false): fetch reaches example.invalid directly
       // and fails DNS resolution rather than going through the configured proxy.
-      installGlobalProxyDispatcher(false);
-      await expect(fetch("http://example.invalid/some-path")).rejects.toThrow();
+      await expect(runIsolatedFetch({ proxyUrl, enabled: false })).rejects.toThrow();
       expect(tunneledRequests).toEqual([]);
 
       // Enabled: fetch now tunnels through HTTP_PROXY. Called twice to prove the install
       // is idempotent and does not throw.
-      installGlobalProxyDispatcher();
-      installGlobalProxyDispatcher();
+      const { stdout } = await runIsolatedFetch({ proxyUrl, enabled: true });
 
-      const response = await fetch("http://example.invalid/some-path");
-
-      expect(await response.text()).toBe("ok-from-proxy");
+      expect(stdout).toBe("ok-from-proxy");
       expect(tunneledRequests).toEqual(["example.invalid:80 :: GET /some-path HTTP/1.1"]);
     } finally {
-      delete process.env.HTTP_PROXY;
       await new Promise<void>((resolve) => proxy.close(() => resolve()));
     }
   });
