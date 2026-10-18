@@ -2,8 +2,19 @@ import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 
 let installed = false;
 
+// Daemon-owned servers (e.g. the local OpenCode server) listen on loopback, which a remote
+// proxy cannot reach, so loopback stays direct even when the user's NO_PROXY omits it.
+const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "[::1]"];
+
 export interface InstallGlobalProxyDispatcherOptions {
   enabled?: boolean;
+}
+
+function resolveNoProxy(): string {
+  const configured = (process.env.no_proxy ?? process.env.NO_PROXY ?? "").trim();
+  // undici only treats NO_PROXY as a wildcard when the whole value is exactly "*".
+  if (configured === "*") return configured;
+  return [configured, ...LOOPBACK_NO_PROXY].filter(Boolean).join(",");
 }
 
 /**
@@ -24,5 +35,5 @@ export function installGlobalProxyDispatcher({
 }: InstallGlobalProxyDispatcherOptions = {}): void {
   if (!enabled || installed) return;
   installed = true;
-  setGlobalDispatcher(new EnvHttpProxyAgent());
+  setGlobalDispatcher(new EnvHttpProxyAgent({ noProxy: resolveNoProxy() }));
 }

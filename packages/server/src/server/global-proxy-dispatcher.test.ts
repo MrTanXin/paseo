@@ -44,15 +44,20 @@ function getListeningPort(server: Server): number {
 interface IsolatedFetchOptions {
   proxyUrl: string;
   enabled: boolean;
+  targetUrl?: string;
 }
 
-async function runIsolatedFetch({ proxyUrl, enabled }: IsolatedFetchOptions) {
+async function runIsolatedFetch({
+  proxyUrl,
+  enabled,
+  targetUrl = "http://example.invalid/some-path",
+}: IsolatedFetchOptions) {
   const dispatcherModule = new URL("./global-proxy-dispatcher.ts", import.meta.url).href;
   const script = `
     const { installGlobalProxyDispatcher } = await import(${JSON.stringify(dispatcherModule)});
     installGlobalProxyDispatcher({ enabled: ${enabled} });
     installGlobalProxyDispatcher({ enabled: ${enabled} });
-    const response = await fetch("http://example.invalid/some-path");
+    const response = await fetch(${JSON.stringify(targetUrl)});
     process.stdout.write(await response.text());
   `;
   const env = {
@@ -105,6 +110,29 @@ describe("installGlobalProxyDispatcher", () => {
       expect(stdout).toBe("ok-from-proxy");
       expect(tunneledRequests).toEqual(["example.invalid:80 :: GET /some-path HTTP/1.1"]);
     } finally {
+      await closeServer(proxy);
+    }
+  });
+
+  test("keeps loopback fetch() direct even when NO_PROXY does not exclude it", async () => {
+    const tunneledRequests: string[] = [];
+    const proxy = createServer();
+    proxy.on("connect", (req, socket) => handleTunneledRequest({ req, socket, tunneledRequests }));
+    const local = createServer((_req, res) => res.end("ok-from-local"));
+    await listenOnLoopback(proxy);
+    await listenOnLoopback(local);
+
+    try {
+      const { stdout } = await runIsolatedFetch({
+        proxyUrl: `http://127.0.0.1:${getListeningPort(proxy)}`,
+        enabled: true,
+        targetUrl: `http://127.0.0.1:${getListeningPort(local)}/global/health`,
+      });
+
+      expect(stdout).toBe("ok-from-local");
+      expect(tunneledRequests).toEqual([]);
+    } finally {
+      await closeServer(local);
       await closeServer(proxy);
     }
   });
